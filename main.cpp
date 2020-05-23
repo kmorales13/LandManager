@@ -12,8 +12,6 @@
 
 #include <dllentry.h>
 #include <hook.h>
-#include <log.h>
-#include <playerdb.h>
 #include <command.h>
 #include <audit.h>
 
@@ -49,22 +47,24 @@ void PostInit() {}
 
 void checkAction(
     Mod::PlayerEntry const &player, Mod::PlayerAction const &pAction, Mod::CallbackToken<std::string> &token) {
-  std::ostringstream val;
+  std::ostringstream p;
 
-  if (action == Action::Create) {
-    switch (pAction.type) {
-    case PlayerActionType::START_BREAK:
-    case PlayerActionType::CONTINUE_BREAK:
-    case PlayerActionType::INTERACT_BLOCK:
+  switch (pAction.type) {
+  case PlayerActionType::START_BREAK:
+  case PlayerActionType::CONTINUE_BREAK:
+  case PlayerActionType::INTERACT_BLOCK: {
+    Vector3 point = Vector3(pAction.pos.x, pAction.pos.y, pAction.pos.z);
+
+    if (action == Action::Create) {
       if (!pointA.init) {
-        pointA = Vector3(pAction.pos.x, pAction.pos.y, pAction.pos.z);
+        pointA = point;
 
         auto packet = TextPacket::createTextPacket<TextPacketType::SystemMessage>(
             player.name,
             "[Zonas] Punto inicial seleccionado, continua seleccionando el punto final o sal con '/land exit'", "");
         player.player->sendNetworkPacket(packet);
       } else {
-        pointB = Vector3(pAction.pos.x, pAction.pos.y, pAction.pos.z);
+        pointB = point;
 
         int vol = pointA.Volume(pointB);
 
@@ -76,45 +76,48 @@ void checkAction(
         auto packet = TextPacket::createTextPacket<TextPacketType::SystemMessage>(player.name, text.str(), "");
         player.player->sendNetworkPacket(packet);
       }
-      token("Blocked by SpawnProtection");
-    default: break;
     }
+
+    bool hasPerm = LandManager::HasPerm(player, point);
+    if (!hasPerm) token("Blocked by SpawnProtection");
+
+    break;
+  }
+  default: break;
   }
 }
 
 void checkInventoryTransaction(
     Mod::PlayerEntry const &entry, ComplexInventoryTransaction const &transaction,
     Mod::CallbackToken<std::string> &token) {
-  if (action == Action::Create) {
-    switch (transaction.type) {
-    case ComplexInventoryTransaction::Type::ITEM_USE: {
-      auto &data = (ItemUseInventoryTransaction const &) transaction;
-      switch (data.actionType) {
-      case ItemUseInventoryTransaction::Type::USE_ITEM_ON: {
-        auto &block  = entry.player->Region->getBlock(data.pos);
-        auto &legacy = block.LegacyBlock;
-        if (!legacy.isInteractiveBlock() || entry.player->isSneaking()) {
-          data.onTransactionError(*entry.player, InventoryTransactionError::Unexcepted);
-          token("Blocked by SpawnProtection");
-        }
-      } break;
-      case ItemUseInventoryTransaction::Type::USE_ITEM: {
-      } break;
-      case ItemUseInventoryTransaction::Type::DESTROY: {
+
+  switch (transaction.type) {
+  case ComplexInventoryTransaction::Type::ITEM_USE: {
+    auto &data = (ItemUseInventoryTransaction const &) transaction;
+
+    switch (data.actionType) {
+    case ItemUseInventoryTransaction::Type::USE_ITEM_ON:
+    case ItemUseInventoryTransaction::Type::USE_ITEM:
+    case ItemUseInventoryTransaction::Type::DESTROY: {
+      Vector3 point = Vector3(data.pos.x, data.pos.y, data.pos.z);
+      bool hasPerm  = LandManager::HasPerm(entry, point);
+
+      if (action == Action::Create || !hasPerm) {
         data.onTransactionError(*entry.player, InventoryTransactionError::Unexcepted);
         token("Blocked by SpawnProtection");
-      } break;
       }
+
     } break;
-    case ComplexInventoryTransaction::Type::ITEM_USE_ON_ACTOR: {
+    }
+  } break;
+
+    /*case ComplexInventoryTransaction::Type::ITEM_USE_ON_ACTOR: {
       auto &data    = (ItemUseOnActorInventoryTransaction const &) transaction;
       auto composed = data.playerPos + data.clickPos;
       data.onTransactionError(*entry.player, InventoryTransactionError::Unexcepted);
       token("Blocked by SpawnProtection");
-    } break;
-    default: break;
-    }
+    } break;*/
+
+  default: break;
   }
 }
-
-

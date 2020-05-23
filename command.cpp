@@ -7,38 +7,30 @@
 
 #include "settings.h"
 
-void reset() {
+DEF_LOGGER("LandManager");
+
+CommandSelector<Player> cmd_player;
+
+void reset(bool hard = true) {
   pointA = Vector3();
   pointB = Vector3();
-  action = Action::None;
-}
-
-bool isInside(Vector3 point, Vector3 start, Vector3 end) {
-  float xMin = std::min(start.X, end.X);
-  float yMin = std::min(start.X, end.X);
-  float zMin = std::min(start.Z, end.Z);
-  float xMax = std::max(start.X, end.X);
-  float yMax = std::max(start.X, end.X);
-  float zMax = std::max(start.Z, end.Z);
-
-  if (point.X < xMin || point.X > xMax || point.Y < yMin || point.Y > yMax || point.Z < zMin || point.Z > zMax) {
-    return false;
-  }
-
-  return true;
+  if (hard) action = Action::None;
 }
 
 class LandManagerCommand : public Command {
 public:
   Action target_action;
+  CommandSelector<Player> target_player;
 
   LandManagerCommand() {}
 
   void execute(CommandOrigin const &origin, CommandOutput &output) {
-    action = target_action;
+    action     = target_action;
+    cmd_player = target_player;
     std::ostringstream re;
 
     if (action == Action::Create) {
+      reset(false);
       output.success("[Zonas] Selecciona el punto inicial o sal con '/land exit'");
     } else if (action == Action::Buy) {
       // If we havent selected two points yet, return
@@ -52,7 +44,7 @@ public:
       auto pInstance = LandManager::GetPlayerInstance(player);
 
       if (!pInstance) {
-        output.error("[Zonas] Error al realizar accion. Consulte al admin.");
+        output.error("[Zonas] Error al realizar accion. Consulte al administrador.");
         return;
       }
 
@@ -66,18 +58,18 @@ public:
       }
 
       // Check if we reached the limit of land we can own
-      bool limit = LandManager::ReachedLimit(*pInstance);
+      auto limit = LandManager::ReachedLimit(*pInstance);
 
       if (limit) {
-        output.error("[Zonas] Haz alcanzado el limite de zonas.");
+        output.error(*limit);
         return;
       }
 
       // Check if we are overlapping any other land
-      bool overlap = LandManager::ExistsLand(*pInstance, pointA, pointB);
+      auto overlap = LandManager::Overlaps(*pInstance, pointA, pointB);
 
       if (overlap) {
-        output.error("[Zonas] Estas encima de una zona ya existente.");
+        output.error(*overlap);
         return;
       }
 
@@ -103,6 +95,31 @@ public:
       output.success("[Zonas] Has comprado la zona.");
 
       reset();
+    } else if (action == Action::Sell) {
+      auto player    = (Player *) origin.getEntity();
+      auto pInstance = LandManager::GetPlayerInstance(player);
+      Vec3 pos       = origin.getWorldPosition();
+
+      std::string sold = LandManager::SellLand(*pInstance, Vector3(pos.x, pos.y, pos.z));
+
+      output.success(sold);
+    } else if (action == Action::Give) {
+      auto &playerdb = Mod::PlayerDatabase::GetInstance().GetData();
+      auto results   = target_player.results(origin);
+
+      if (results.count() > 0) {
+        auto first = *(results.begin());
+        auto it    = playerdb.find(first);
+        if (it != playerdb.end()) {
+          Vec3 pos = origin.getWorldPosition();
+
+          std::string give = LandManager::GiveLand(*it, Vector3(pos.x, pos.y, pos.z));
+
+          output.success(give);
+        }
+      } else {
+        output.error("[Zonas] No se encontro el jugador objetivo especificado.");
+      }
     } else if (action == Action::Exit) {
       reset();
     }
@@ -115,10 +132,17 @@ public:
         "land", "Administracion de zonas", CommandPermissionLevel::Any, CommandFlagCheat, CommandFlagNone);
 
     addEnum<Action>(
-        registry, "land-option", {{"create", Action::Create}, {"buy", Action::Buy}, {"exit", Action::Exit}});
+        registry, "land-option",
+        {{"create", Action::Create}, {"buy", Action::Buy}, {"sell", Action::Sell}, {"exit", Action::Exit}});
+
+    addEnum<Action>(registry, "land-option-give", {{"give", Action::Give}});
 
     registry->registerOverload<LandManagerCommand>(
         "land", mandatory<CommandParameterDataType::ENUM>(&LandManagerCommand::target_action, "action", "land-option"));
+    registry->registerOverload<LandManagerCommand>(
+        "land",
+        mandatory<CommandParameterDataType::ENUM>(&LandManagerCommand::target_action, "action", "land-option-give"),
+        mandatory(&LandManagerCommand::target_player, "target"));
   }
 };
 
